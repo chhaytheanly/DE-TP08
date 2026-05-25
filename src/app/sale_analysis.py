@@ -1,4 +1,5 @@
 from pathlib import Path
+import shutil
 
 from pyspark.sql import SparkSession
 from pyspark.sql.types import (StructType, StructField, IntegerType, StringType, DoubleType)
@@ -143,6 +144,35 @@ class WarehouseRetailSalesAnalysis:
         print("- Enforced valid month/year ranges")
         print("- Excluded negative sales values")
 
+    def save_cleaned_data(self, output_path=None):
+        if self.cleaned_df is None:
+            raise ValueError("Cleaned data is not available. Run clean_data() first.")
+
+        if output_path is None:
+            output_path = Path(__file__).resolve().parents[2] / "outputs" / "cleaned.csv"
+        else:
+            output_path = Path(output_path)
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        temp_dir = output_path.parent / f".{output_path.stem}_tmp"
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir)
+
+        self.cleaned_df.coalesce(1).write.mode("overwrite").option("header", True).csv(str(temp_dir))
+
+        part_file = next(temp_dir.glob("part-*.csv"), None)
+        if part_file is None:
+            raise RuntimeError("Failed to locate the exported CSV part file.")
+
+        if output_path.exists():
+            output_path.unlink()
+
+        shutil.move(str(part_file), str(output_path))
+        shutil.rmtree(temp_dir)
+
+        print(f"Cleaned CSV saved to: {output_path}")
+
     def _analysis_frame(self):
         return self.cleaned_df if self.cleaned_df is not None else self.df
 
@@ -248,6 +278,7 @@ class WarehouseRetailSalesAnalysis:
         self.load_data()
         self.normalize_data()
         self.clean_data()
+        self.save_cleaned_data()
 
         self.get_total_retail_sales()
         self.get_average_retail_sales()
