@@ -57,6 +57,9 @@ class WarehouseRetailSalesAnalysis:
         self.df = None
         self.cleaned_df = None
 
+    def _output_root(self):
+        return Path(self.file_path).resolve().parent.parent / "outputs"
+
     def load_data(self):
         self.df = self.spark.read.csv(
             self.file_path,
@@ -149,7 +152,7 @@ class WarehouseRetailSalesAnalysis:
             raise ValueError("Cleaned data is not available. Run clean_data() first.")
 
         if output_path is None:
-            output_path = Path(__file__).resolve().parents[2] / "outputs" / "cleaned.csv"
+            output_path = self._output_root() / "cleaned.csv"
         else:
             output_path = Path(output_path)
 
@@ -161,7 +164,10 @@ class WarehouseRetailSalesAnalysis:
 
         self.cleaned_df.coalesce(1).write.mode("overwrite").option("header", True).csv(str(temp_dir))
 
-        part_file = next(temp_dir.glob("part-*.csv"), None)
+        part_file = next(
+            (path for path in temp_dir.iterdir() if path.is_file() and path.name.startswith("part-")),
+            None,
+        )
         if part_file is None:
             raise RuntimeError("Failed to locate the exported CSV part file.")
 
@@ -250,7 +256,7 @@ class WarehouseRetailSalesAnalysis:
         pandas_df = supplier_sales.limit(limit).toPandas()
 
         if output_path is None:
-            output_path = str(Path(__file__).resolve().parents[2] / "outputs" / "top_suppliers_sales.png")
+            output_path = str(self._output_root() / "top_suppliers_sales.png")
 
         output_file = Path(output_path)
         output_file.parent.mkdir(parents=True, exist_ok=True)
