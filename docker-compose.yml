@@ -15,15 +15,18 @@ services:
 
   spark-worker:
     build: .
-    container_name: spark-worker
+    deploy:
+      replicas: 3
     depends_on:
       - spark-master
     command: >
       /opt/spark/bin/spark-class
       org.apache.spark.deploy.worker.Worker
       spark://spark-master:7077
+      -c 2
+      -m 2048m
     ports:
-      - "8081:8081"
+      - "8081-8083:8081"
     volumes:
       - ./src:/opt/spark-apps
 

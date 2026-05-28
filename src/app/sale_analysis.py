@@ -1,5 +1,8 @@
 from pathlib import Path
 import shutil
+import time
+
+import pandas as pd
 
 from pyspark.sql import SparkSession
 from pyspark.sql.types import (StructType, StructField, IntegerType, StringType, DoubleType)
@@ -20,6 +23,25 @@ import matplotlib.pyplot as plt
 
 
 class WarehouseRetailSalesAnalysis:
+    """
+    Distributed Sales Data Analysis using PySpark.
+    
+    How Spark distributes:
+    - Spark uses a master-worker architecture. The driver (master) runs the main()
+      and splits the data into partitions (default ~128 MB each).
+    - Partitions are distributed across worker nodes in the cluster. Each worker
+      processes its partition(s) independently in parallel.
+    - For the CSV read, Spark creates a partition for each file split, so
+      multiple workers read different chunks simultaneously.
+    - Transformations (filter, groupBy, withColumn) are lazy — they build a DAG
+      of stages. Actions (show, count, save) trigger job execution: the DAG
+      scheduler splits the job into stages, each stage is split into tasks,
+      and tasks are sent to workers for parallel execution.
+    - Shuffle operations (groupBy, orderBy) repartition data across workers,
+      causing network I/O. Spark optimises this with pipelining and codegen.
+    - Fault tolerance: if a worker fails, Spark recomputes its partitions from
+      lineage (RDD DAG) or from shuffle files on surviving workers.
+    """
     COLUMN_MAP = {
         "YEAR": "year",
         "MONTH": "month",
@@ -35,12 +57,15 @@ class WarehouseRetailSalesAnalysis:
     def __init__(self, file_path):
         self.file_path = file_path
 
-        # Added spark.jars.packages configuration to dynamically download 
-        # the required PostgreSQL JDBC driver via Maven.
         self.spark = SparkSession.builder \
             .appName("WarehouseRetailSalesAnalysis") \
             .master("spark://spark-master:7077") \
             .config("spark.jars.packages", "org.postgresql:postgresql:42.7.2") \
+            .config("spark.executor.cores", "2") \
+            .config("spark.executor.memory", "2g") \
+            .config("spark.driver.memory", "2g") \
+            .config("spark.sql.shuffle.partitions", "12") \
+            .config("spark.default.parallelism", "12") \
             .getOrCreate()
 
         self.spark.sparkContext.setLogLevel("ERROR")
@@ -154,7 +179,6 @@ class WarehouseRetailSalesAnalysis:
         if self.cleaned_df is None:
             raise ValueError("Cleaned data is not available. Run clean_data() first.")
 
-        # --- Part A: Save Backup CSV Locally ---
         if output_path is None:
             output_path = self._output_root() / "cleaned.csv"
         else:
@@ -219,6 +243,20 @@ class WarehouseRetailSalesAnalysis:
 
         return result
 
+    def get_total_sales(self):
+        result = self._analysis_frame().agg(
+            sum("retail_sales").alias("total_retail_sales"),
+            sum("warehouse_sales").alias("total_warehouse_sales"),
+            sum("retail_transfers").alias("total_retail_transfers"),
+            (sum("retail_sales") + sum("warehouse_sales") + sum("retail_transfers"))
+            .alias("total_distribution_sales"),
+        )
+
+        print("=== TOTAL SALES ===")
+        result.show()
+
+        return result
+
     def get_average_retail_sales(self):
         result = self._analysis_frame().agg(
             avg("retail_sales").alias("average_retail_sales")
@@ -243,6 +281,28 @@ class WarehouseRetailSalesAnalysis:
         result.show(truncate=False)
 
         return result
+
+    def get_top_selling_store(self):
+        result = (
+            self._analysis_frame().groupBy("item_type")
+            .agg(
+                (sum("retail_sales") + sum("warehouse_sales") + sum("retail_transfers"))
+                .alias("total_distribution_sales")
+            )
+            .orderBy(col("total_distribution_sales").desc())
+        )
+
+        top_store = result.first()
+
+        if top_store:
+            print("=== TOP-SELLING STORE ===")
+            print(
+                f"Store: {top_store['item_type']} "
+                f"with total distribution sales "
+                f"{top_store['total_distribution_sales']:.2f}"
+            )
+
+        return top_store
 
     def get_top_suppliers(self, limit=10):
         result = (
@@ -307,20 +367,57 @@ class WarehouseRetailSalesAnalysis:
 
         print(f"Chart saved to: {output_file}")
 
+    def compare_spark_vs_pandas(self):
+        print("\n" + "=" * 60)
+        print("SPARK vs PANDAS PERFORMANCE COMPARISON")
+        print("=" * 60)
+
+        spark_start = time.time()
+        spark_total = self._analysis_frame().agg(
+            sum("retail_sales").alias("total_retail_sales")
+        ).collect()[0][0]
+        spark_end = time.time()
+        spark_time = spark_end - spark_start
+
+        pandas_start = time.time()
+        pdf = pd.read_csv(
+            self.file_path,
+            usecols=["RETAIL SALES", "WAREHOUSE SALES", "RETAIL TRANSFERS"]
+        )
+        pdf = pdf.fillna(0)
+        pandas_total = pdf["RETAIL SALES"].sum()
+        pandas_end = time.time()
+        pandas_time = pandas_end - pandas_start
+
+        print(f"\nTotal Retail Sales (Spark):  {spark_total:.2f}  (took {spark_time:.4f}s)")
+        print(f"Total Retail Sales (Pandas): {pandas_total:.2f}  (took {pandas_time:.4f}s)")
+
+        if spark_time < pandas_time:
+            ratio = pandas_time / spark_time if spark_time > 0 else float("inf")
+            print(f"\nSpark is {ratio:.1f}x faster than Pandas on this machine.")
+        else:
+            ratio = spark_time / pandas_time if pandas_time > 0 else float("inf")
+            print(f"\nPandas is {ratio:.1f}x faster than Spark on this machine (small dataset).")
+        print("=" * 60 + "\n")
+
     def run_analysis(self):
         self.load_data()
         self.normalize_data()
         self.clean_data()
         self.save_cleaned_data()  # Updates both local CSV and Postgres
 
+        self.get_total_sales()
         self.get_total_retail_sales()
         self.get_average_retail_sales()
 
         self.get_sales_by_item_type()
 
+        self.get_top_selling_store()
         self.get_top_supplier()
 
         self.generate_top_suppliers_chart()
+
+        self.compare_spark_vs_pandas()
 
     def stop(self):
         self.spark.stop()
