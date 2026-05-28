@@ -24,9 +24,9 @@ Running the analysis will:
 ├── src/
 │   ├── app/
 │   │   └── sale_analysis.py
-│   └── database/
-│       └── Warehouse_and_Retail_Sales.csv
-└── outputs/               # created under src/ when the analysis runs
+│   ├── database/
+│   │   └── Warehouse_and_Retail_Sales.csv
+│   └── outputs/           # created when the analysis runs
 ```
 
 ## Requirements
