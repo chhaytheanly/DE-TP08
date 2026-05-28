@@ -56,12 +56,12 @@ This starts two containers:
 
 ## Run the analysis
 
-The entrypoint is `main.py`. It creates a `WarehouseRetailSalesAnalysis` instance and connects to the Spark master at `spark://spark-master:7077`.
+The container-accessible analysis script is `src/app/sale_analysis.py`, mounted in the Spark container at `/opt/spark-apps/app/sale_analysis.py`. It creates a `WarehouseRetailSalesAnalysis` instance and connects to the Spark master at `spark://spark-master:7077`.
 
 Run it inside the Spark container environment, for example:
 
 ```bash
-docker compose exec spark-master python /opt/spark-apps/main.py
+docker compose exec spark-master python /opt/spark-apps/app/sale_analysis.py
 ```
 
 or
