@@ -35,9 +35,12 @@ class WarehouseRetailSalesAnalysis:
     def __init__(self, file_path):
         self.file_path = file_path
 
+        # Added spark.jars.packages configuration to dynamically download 
+        # the required PostgreSQL JDBC driver via Maven.
         self.spark = SparkSession.builder \
             .appName("WarehouseRetailSalesAnalysis") \
             .master("spark://spark-master:7077") \
+            .config("spark.jars.packages", "org.postgresql:postgresql:42.7.2") \
             .getOrCreate()
 
         self.spark.sparkContext.setLogLevel("ERROR")
@@ -151,6 +154,7 @@ class WarehouseRetailSalesAnalysis:
         if self.cleaned_df is None:
             raise ValueError("Cleaned data is not available. Run clean_data() first.")
 
+        # --- Part A: Save Backup CSV Locally ---
         if output_path is None:
             output_path = self._output_root() / "cleaned.csv"
         else:
@@ -178,6 +182,29 @@ class WarehouseRetailSalesAnalysis:
         shutil.rmtree(temp_dir)
 
         print(f"Cleaned CSV saved to: {output_path}")
+
+        print("=== WRITING CLEANED DATA TO POSTGRESQL ===")
+        
+        jdbc_url = "jdbc:postgresql://postgres:5432/tp08"
+        
+        db_properties = {
+            "user": "root",
+            "password": "root123",
+            "driver": "org.postgresql.Driver"
+        }
+
+        try:
+            self.cleaned_df.write.format("jdbc") \
+                .option("url", jdbc_url) \
+                .option("dbtable", "cleaned_retail_sales") \
+                .option("user", db_properties["user"]) \
+                .option("password", db_properties["password"]) \
+                .option("driver", db_properties["driver"]) \
+                .mode("overwrite") \
+                .save()
+            print("Successfully transferred all data to PostgreSQL table: 'cleaned_retail_sales'")
+        except Exception as e:
+            print(f"CRITICAL: Failed to write to PostgreSQL. Error details: {e}")
 
     def _analysis_frame(self):
         return self.cleaned_df if self.cleaned_df is not None else self.df
@@ -284,7 +311,7 @@ class WarehouseRetailSalesAnalysis:
         self.load_data()
         self.normalize_data()
         self.clean_data()
-        self.save_cleaned_data()
+        self.save_cleaned_data()  # Updates both local CSV and Postgres
 
         self.get_total_retail_sales()
         self.get_average_retail_sales()
@@ -306,6 +333,5 @@ if __name__ == "__main__":
 
     try:
         analysis.run_analysis()
-
     finally:
         analysis.stop()
